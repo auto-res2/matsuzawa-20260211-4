@@ -562,5 +562,138 @@
     "experimental_code": "import re, random\nimport numpy as np\nimport torch\nfrom datasets import load_dataset\nfrom sklearn.feature_extraction.text import TfidfVectorizer\nfrom sklearn.cluster import KMeans\nfrom transformers import AutoTokenizer, AutoModelForSeq2SeqLM\n\nNUM_RE = re.compile(r\"(-?\\d+(?:\\.\\d+)?)\")\n\ndef extract_number(text):\n    nums = NUM_RE.findall(text.replace(\",\", \"\"))\n    return nums[-1] if nums else None\n\n@torch.inference_mode()\ndef gen(model, tok, prompt, do_sample=False, temperature=1.0, max_new_tokens=128):\n    inp = tok(prompt, return_tensors=\"pt\", truncation=True, max_length=512)\n    inp = {k: v.to(model.device) for k, v in inp.items()}\n    out = model.generate(**inp, do_sample=do_sample, temperature=temperature,\n                         max_new_tokens=max_new_tokens)\n    return tok.decode(out[0], skip_special_tokens=True)\n\ndef select_diverse(questions, k, seed=0):\n    vec = TfidfVectorizer(stop_words=\"english\", max_features=5000)\n    X = vec.fit_transform(questions)\n    km = KMeans(n_clusters=k, random_state=seed, n_init=\"auto\")\n    labels = km.fit_predict(X)\n    reps = []\n    for c in range(k):\n        idx = np.where(labels == c)[0]\n        if len(idx) == 0:\n            reps.append(random.randrange(len(questions)))\n            continue\n        centroid = km.cluster_centers_[c]\n        subX = X[idx].toarray()\n        d2 = ((subX - centroid) ** 2).sum(axis=1)\n        reps.append(int(idx[np.argmin(d2)]))\n    return reps\n\ndef paraphrase(model, tok, q, do_sample=True, temperature=0.7):\n    # strict paraphrase prompt: change wording, keep meaning/numbers\n    p = (\n        \"Rewrite the following math word problem in different words, \"\n        \"keeping all quantities, constraints, and meaning identical. \"\n        \"Return ONLY the rewritten question.\\n\\n\"\n        f\"Question: {q}\\nRewritten question:\"\n    )\n    out = gen(model, tok, p, do_sample=do_sample, temperature=temperature, max_new_tokens=96)\n    # light cleanup: take first line to avoid extra chatter\n    return out.strip().split(\"\\n\")[0].strip()\n\ndef self_consistency_majority(model, tok, q, m=5, temperature=0.8):\n    prompt = f\"Solve step by step.\\nQ: {q}\\nA:\"\n    answers = []\n    for _ in range(m):\n        txt = gen(model, tok, prompt, do_sample=True, temperature=temperature)\n        a = extract_number(txt)\n        if a is not None:\n            answers.append(a)\n    if not answers:\n        return 0.0, None\n    vals, counts = np.unique(answers, return_counts=True)\n    maj = vals[np.argmax(counts)]\n    return float(counts.max() / len(answers)), str(maj)\n\ndef paraphrase_consistency(model, tok, q, maj_answer, P=3):\n    if maj_answer is None:\n        return 0.0\n    hits, seen = 0, 0\n    for _ in range(P):\n        q2 = paraphrase(model, tok, q)\n        sol = gen(model, tok, f\"Solve step by step.\\nQ: {q2}\\nA:\", do_sample=False)\n        a2 = extract_number(sol)\n        if a2 is None:\n            continue\n        seen += 1\n        hits += int(a2 == maj_answer)\n    return (hits / seen) if seen else 0.0\n\ndef build_demo(q, solution_text, final_ans, w=None):\n    # keep demo minimal; include final answer explicitly\n    tag = f\"[reliability={w:.2f}]\\n\" if w is not None else \"\"\n    return f\"Q: {q}\\n{tag}A: {solution_text.strip()}\\nFinal answer: {final_ans}\\n\\n\"\n\ndef build_prompt(demos, test_q):\n    header = \"You are a careful solver. Show concise reasoning and give a final numeric answer.\\n\\n\"\n    return header + \"\".join(demos) + f\"Q: {test_q}\\nA:\"\n\ndef run(dataset_name=\"gsm8k\", subset=\"main\", k=6, m=5, P=3, tau=0.6,\n        n_pool=200, n_test=100, seed=0, model_name=\"google/flan-t5-base\"):\n    random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)\n\n    ds = load_dataset(dataset_name, subset) if subset else load_dataset(dataset_name)\n    pool = ds[\"train\"].select(range(n_pool))\n    test = ds[\"test\"].select(range(n_test))\n\n    tok = AutoTokenizer.from_pretrained(model_name)\n    model = AutoModelForSeq2SeqLM.from_pretrained(model_name)\n    model.to(\"cuda\" if torch.cuda.is_available() else \"cpu\"); model.eval()\n\n    pool_qs = [x[\"question\"] for x in pool]\n    rep_ids = select_diverse(pool_qs, k=k, seed=seed)\n\n    demos_autocot = []\n    demos_cw = []          # self-consistency only\n    demos_pr = []          # paraphrase-robust\n\n    for idx in rep_ids:\n        q = pool_qs[idx]\n        # 1) generate a single demo (greedy) used across methods\n        demo_txt = gen(model, tok, f\"Solve step by step.\\nQ: {q}\\nA:\", do_sample=False)\n        demo_ans = extract_number(demo_txt) or \"N/A\"\n        demos_autocot.append(build_demo(q, demo_txt, demo_ans))\n\n        # 2) CW score\n        s_i, maj = self_consistency_majority(model, tok, q, m=m, temperature=0.8)\n        demos_cw.append((s_i, build_demo(q, demo_txt, demo_ans, w=s_i)))\n\n        # 3) PR score (self-consistency + paraphrase-consistency)\n        p_i = paraphrase_consistency(model, tok, q, maj, P=P)\n        w_i = float(np.sqrt(s_i * p_i))\n        demos_pr.append((w_i, build_demo(q, demo_txt, demo_ans, w=w_i)))\n\n    # assemble CW prompt\n    cw_sorted = sorted(demos_cw, key=lambda x: -x[0])\n    demos_cw_final = [d for w, d in cw_sorted if w >= tau] or demos_autocot\n\n    # assemble PR prompt\n    pr_sorted = sorted(demos_pr, key=lambda x: -x[0])\n    demos_pr_final = [d for w, d in pr_sorted if w >= tau] or demos_autocot\n\n    def eval_acc(demos):\n        correct = 0\n        for ex in test:\n            prompt = build_prompt(demos, ex[\"question\"])\n            out = gen(model, tok, prompt, do_sample=False)\n            pred = extract_number(out)\n            gold = extract_number(ex[\"answer\"]) if \"answer\" in ex else None\n            correct += int(pred is not None and gold is not None and pred == gold)\n        return correct / len(test)\n\n    return {\n        \"acc_autocot\": eval_acc(demos_autocot),\n        \"acc_cw\": eval_acc(demos_cw_final),\n        \"acc_pr\": eval_acc(demos_pr_final),\n        \"n_cw_demos\": len(demos_cw_final),\n        \"n_pr_demos\": len(demos_pr_final),\n        \"mean_w_pr\": float(np.mean([w for w, _ in pr_sorted]))\n    }\n\nif __name__ == \"__main__\":\n    res = run(n_pool=200, n_test=50, k=6, m=5, P=3, tau=0.6)\n    print(res)\n",
     "expected_result": "PR-AutoCoT should outperform Auto-CoT and CW-AutoCoT particularly when the model produces *stable but wrong* demos.\n\nIllustrative expectations (flan-t5-base, GSM8K, n_test≈100–200):\n- Zero-Shot-CoT: accuracy ≈ 0.18–0.28\n- Auto-CoT: accuracy ≈ 0.22–0.32\n- CW-AutoCoT (self-consistency only): accuracy ≈ 0.25–0.35\n- **PR-AutoCoT (self-consistency + paraphrase robustness): accuracy ≈ 0.28–0.40**\n\nExpected deltas:\n- +0.03 to +0.06 absolute accuracy over CW-AutoCoT on GSM8K.\n- Retained demo count may drop (e.g., from 6 to 3–5), but accuracy should improve or stay flat.\n- Diagnostic: demos with high self-consistency but low paraphrase-consistency will be common; filtering them explains gains.\n\nHigher is better for accuracy.",
     "expected_conclusion": "A prompt-only demo selection criterion based on **semantic robustness** (answer invariance to meaning-preserving paraphrases) provides a qualitatively stronger defense against *confidently wrong* auto-generated CoT demonstrations than self-consistency alone. This makes automatic CoT construction more reliable and socially safer (reducing propagation of systematic misconceptions) while remaining lightweight and reproducible: it uses only the same LLM via prompting plus simple Python orchestration, with no fine-tuning and no external verifier models. The key academic novelty is formalizing and testing paraphrase-invariance as a practical, estimator-like reliability signal for in-context demonstration selection—addressing a failure mode explicitly left open by Auto-CoT and not solved by agreement-only weighting."
+  },
+  "experimental_design": {
+    "experiment_summary": "Task: Given a math word problem, the model must produce a step-by-step solution and a final numeric answer; evaluation checks whether the final numeric answer is correct.\n\nPurpose: Demonstrate that PR-AutoCoT (Paraphrase-Robust Auto-CoT) improves downstream problem-solving accuracy by constructing higher-reliability chain-of-thought demonstrations from an unlabeled question pool, specifically reducing harm from “confidently-wrong” demonstrations that appear self-consistent yet are brittle to meaning-preserving reformulations.\n\nWorkflow (single base LLM; prompt-only; no finetuning):\n1) Build an unlabeled demo pool from GSM8K train questions (ignore train answers during selection).\n2) Diverse candidate selection (Auto-CoT standard): TF-IDF vectorize train questions → k-means clustering → select k representative questions.\n3) For each representative question q_i, generate one candidate demonstration (greedy) consisting of rationale r_i and extracted final numeric answer â_i.\n4) Score each demo with two internal reliability signals:\n   a) Self-consistency s_i: sample m stochastic solutions to q_i, extract numeric answers, s_i = majority fraction.\n   b) Paraphrase-consistency p_i (new): generate P strict meaning-preserving paraphrases of q_i; solve each paraphrase once (greedy/low-temp); p_i = fraction matching the majority answer from (a).\n   c) Reliability weight w_i = sqrt(s_i * p_i) (ablations may use min(s_i,p_i)).\n5) Reliability-aware assembly: keep demos with w_i >= τ; order by descending w_i; concatenate into an in-context prompt; solve GSM8K test questions with greedy decoding.\n\nComparisons: PR-AutoCoT vs CW-AutoCoT (self-consistency-only filtering/ordering). Both share the same diverse clustering step and the same initially generated candidate demos; they differ only in how they score/filter/order demos.\n\nScale fitting the provided Runner (single H200 140GB VRAM):\n- Inference-only generation; no training.\n- Subsample to keep runtime bounded: n_pool=500 train questions for clustering; k=6 demos; m=5 self-consistency samples; P=3 paraphrases; evaluate on first n_test=200 GSM8K test problems.\n- Use bfloat16, batch size 1 generation; optionally enable caching and parallelize across CPU threads for TF-IDF/k-means.\nThis comfortably fits in 140GB VRAM while keeping total generations to ~k*(1 + m + P) + n_test per method (on the order of a few thousand short generations).",
+    "runner_config": {
+      "runner_label": [
+        "self-hosted",
+        "gpu-runner"
+      ],
+      "description": "NVIDIA H200, VRAM: 140 GB, RAM: 240 GB"
+    },
+    "evaluation_metrics": [
+      {
+        "name": "accuracy",
+        "description": "Correctness criteria: A prediction is correct if the model’s extracted final numeric answer matches the gold answer after normalization.\n- Normalize by: removing commas; stripping whitespace; extracting the last occurring number token from the model output and from the gold answer using regex (-?\\d+(?:\\.\\d+)?).\n- If either side has no extractable number, mark incorrect.\n- Optional tolerance (report as secondary within the same metric implementation): if both are floats, treat as correct when |pred-gold| <= 1e-3; default GSM8K evaluation uses exact match on normalized numeric string because GSM8K answers are typically integers.\n\nCalculation method: accuracy = (1/N) * Σ_{j=1..N} 1[ norm_num(pred_j) == norm_num(gold_j) ].\n\nTask appropriateness: GSM8K is a math word-problem benchmark where the primary success criterion is the final numeric answer, independent of the reasoning text; accuracy directly measures end-task performance.\n\nRelevant visualizations:\n- Bar chart of accuracy by method (CW-AutoCoT vs PR-AutoCoT), with bootstrap 95% confidence intervals.\n- Error-type histogram: distribution of (pred-gold) for numeric answers when both parse as numbers (useful when tolerance is enabled)."
+      },
+      {
+        "name": "DemoRetentionRate",
+        "description": "Correctness criteria: Not applicable (diagnostic metric).\n\nCalculation method: For each run, retention = (# demos with score >= τ) / k. Report mean retention across random seeds.\n\nTask appropriateness: PR-AutoCoT may improve accuracy by filtering brittle/confidently-wrong demos; retention quantifies how aggressive filtering is and helps interpret accuracy changes (e.g., gains due to removing poisoned demos vs simply using fewer demos).\n\nRelevant visualizations:\n- Line plot of retention vs τ for PR-AutoCoT and CW-AutoCoT.\n- Scatter plot of retention vs accuracy across seeds/τ settings."
+      },
+      {
+        "name": "ReliabilityScoreGoldCorrelation",
+        "description": "Correctness criteria: Not applicable (analysis-only; must NOT be used for demo selection). Uses train labels solely post hoc.\n\nCalculation method:\n- For each selected cluster-representative question q_i (from the train pool), compute y_i = 1 if the candidate demo’s extracted answer â_i matches the train gold answer, else 0.\n- Compute Spearman rank correlation ρ between w_i (or s_i for CW baseline) and y_i over the k demos: ρ = Spearman(w, y).\n- Report mean and std over seeds.\n\nTask appropriateness: The hypothesis claims paraphrase-consistency detects “confidently-wrong” demos missed by self-consistency; higher correlation indicates the scoring signal better aligns with true correctness.\n\nRelevant visualizations:\n- Box plot of Spearman ρ across seeds for PR-AutoCoT vs CW-AutoCoT.\n- Reliability calibration plot: bin demos by score (e.g., 3–5 bins) and plot empirical P(correct) vs mean score per bin."
+      },
+      {
+        "name": "ParaphraseFlipRate",
+        "description": "Correctness criteria: Not applicable (diagnostic).\n\nCalculation method:\n- For each demo question q_i, let a_major be the majority answer from m self-consistency samples on the original q_i.\n- For each paraphrase q_i^(t), solve once and extract a_t.\n- Flip indicator f_{i,t} = 1[a_t != a_major] when both numbers are extracted.\n- ParaphraseFlipRate = (Σ_i Σ_t f_{i,t}) / (Σ_i Σ_t 1[parsable]).\n\nTask appropriateness: Directly measures brittleness under meaning-preserving reformulation, the core novelty PR-AutoCoT exploits.\n\nRelevant visualizations:\n- Histogram of per-demo flip rate (mean over paraphrases) to show prevalence of brittle demos.\n- Scatter plot of (self-consistency s_i) vs (paraphrase-consistency p_i) highlighting high-s/low-p poisoned demos."
+      }
+    ],
+    "models_to_use": [
+      "Qwen3-8B (8B)"
+    ],
+    "datasets_to_use": [
+      "gsm8k (openai/gsm8k, main)"
+    ],
+    "proposed_method": {
+      "method_name": "PR-AutoCoT (Paraphrase-Robust Auto-CoT)",
+      "description": "Prompt-only automatic CoT demonstration construction that augments Auto-CoT’s diversity-based demo selection with a model-internal semantic robustness signal: answer invariance under strict meaning-preserving paraphrases (“restate-and-resolve”). Each candidate demo is weighted by w_i = sqrt(s_i * p_i), combining self-consistency (uncertainty) with paraphrase-consistency (semantic brittleness/confident-error detection), then filtered/ordered for in-context prompting.",
+      "optuna_config": {
+        "enabled": true,
+        "n_trials": 12,
+        "search_spaces": [
+          {
+            "param_name": "tau",
+            "distribution_type": "uniform",
+            "low": 0.4,
+            "high": 0.8
+          },
+          {
+            "param_name": "k",
+            "distribution_type": "categorical",
+            "choices": [
+              4,
+              6,
+              8
+            ]
+          },
+          {
+            "param_name": "m",
+            "distribution_type": "categorical",
+            "choices": [
+              3,
+              5,
+              7
+            ]
+          },
+          {
+            "param_name": "P",
+            "distribution_type": "categorical",
+            "choices": [
+              2,
+              3,
+              4
+            ]
+          },
+          {
+            "param_name": "weight_formula",
+            "distribution_type": "categorical",
+            "choices": [
+              "sqrt",
+              "min"
+            ]
+          },
+          {
+            "param_name": "paraphrase_temperature",
+            "distribution_type": "uniform",
+            "low": 0.3,
+            "high": 0.9
+          }
+        ]
+      }
+    },
+    "comparative_methods": [
+      {
+        "method_name": "CW-AutoCoT (Self-Consistency Filtering)",
+        "description": "Auto-CoT with confidence weighting based only on self-consistency over repeated stochastic solutions of the original question. Each demo gets score s_i = majority_fraction from m samples; demos are filtered/ordered by s_i with threshold τ. This baseline captures agreement-only uncertainty heuristics but does not test semantic robustness under paraphrases.",
+        "optuna_config": {
+          "enabled": true,
+          "n_trials": 12,
+          "search_spaces": [
+            {
+              "param_name": "tau",
+              "distribution_type": "uniform",
+              "low": 0.4,
+              "high": 0.8
+            },
+            {
+              "param_name": "k",
+              "distribution_type": "categorical",
+              "choices": [
+                4,
+                6,
+                8
+              ]
+            },
+            {
+              "param_name": "m",
+              "distribution_type": "categorical",
+              "choices": [
+                3,
+                5,
+                7
+              ]
+            },
+            {
+              "param_name": "sc_temperature",
+              "distribution_type": "uniform",
+              "low": 0.5,
+              "high": 1.0
+            }
+          ]
+        }
+      }
+    ]
   }
 }
