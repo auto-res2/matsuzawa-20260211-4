@@ -54,6 +54,12 @@ def main(cfg: DictConfig) -> None:
     original_args = sys.argv[1:]  # Get original hydra args
     cmd.extend(original_args)
     
+    # Add mode-specific overrides to ensure subprocess gets the same config
+    if cfg.mode == "sanity_check":
+        # Explicitly override wandb.mode for subprocess
+        if "wandb.mode=" not in ' '.join(original_args):
+            cmd.append("wandb.mode=disabled")
+    
     print(f"[main] Invoking inference.py: {' '.join(cmd)}")
     
     # Invoke inference.py as subprocess
