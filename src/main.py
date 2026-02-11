@@ -68,7 +68,7 @@ def main(cfg: DictConfig) -> None:
         print(f"[main] inference.py exited with code {result.returncode}")
         sys.exit(result.returncode)
     
-    print(f"[main] Completed run {cfg.run.run_id}")
+    print(f"[main] Completed run {cfg.run_id}")
 
 
 if __name__ == "__main__":

@@ -355,7 +355,7 @@ def run_inference(cfg: DictConfig) -> None:
         wandb.init(
             entity=cfg.wandb.entity,
             project=cfg.wandb.project,
-            id=cfg.run.run_id,
+            id=cfg.run_id,
             config=OmegaConf.to_container(cfg, resolve=True),
             resume="allow"
         )
@@ -433,7 +433,7 @@ def run_inference(cfg: DictConfig) -> None:
     print(f"[inference] Final accuracy: {final_accuracy:.4f} ({correct}/{total})")
     
     # Save results
-    results_dir = Path(cfg.results_dir) / cfg.run.run_id
+    results_dir = Path(cfg.results_dir) / cfg.run_id
     results_dir.mkdir(parents=True, exist_ok=True)
     
     with open(results_dir / 'results.json', 'w') as f:
@@ -520,7 +520,7 @@ def perform_sanity_validation(results: List[Dict[str, Any]], demonstrations: Lis
 @hydra.main(config_path="../config", config_name="config", version_base="1.3")
 def main(cfg: DictConfig) -> None:
     """Entry point."""
-    print(f"[inference] Starting {cfg.method.name} for run {cfg.run.run_id}")
+    print(f"[inference] Starting {cfg.method.name} for run {cfg.run_id}")
     print(f"[inference] Mode: {cfg.mode}")
     print(f"[inference] Dataset: {cfg.dataset.name}")
     
