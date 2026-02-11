@@ -371,8 +371,12 @@ def run_inference(cfg: DictConfig) -> None:
         test_data = test_data[:cfg.inference.sanity_check_samples]
         print(f"[inference] Sanity check mode: limited to {len(test_data)} test samples")
     
-    # Initialize model
-    model = OpenAIModel(cfg.model)
+    # Initialize model with ground truth data for mock mode
+    ground_truth_data = {
+        'train': train_data,
+        'test': test_data
+    }
+    model = OpenAIModel(cfg.model, ground_truth_data=ground_truth_data)
     
     # Build demonstrations
     demonstrations = build_demonstrations(train_data, model, cfg)
