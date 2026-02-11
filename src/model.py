@@ -3,6 +3,7 @@ Model wrapper for language models (OpenAI API).
 """
 import os
 import re
+import sys
 from typing import Optional, Dict, Any
 from omegaconf import DictConfig
 import openai
@@ -35,11 +36,22 @@ class OpenAIModel:
         
         # Initialize OpenAI client
         api_key = os.environ.get('OPENAI_API_KEY')
-        if not api_key:
-            print("[model] WARNING: OPENAI_API_KEY not set, using mock responses")
+        if not api_key or api_key.strip() == '':
+            print("[model] WARNING: OPENAI_API_KEY not set or empty, using mock responses")
+            sys.stdout.flush()
             self.client = None
         else:
-            self.client = openai.OpenAI(api_key=api_key)
+            print(f"[model] Initializing OpenAI client with API key (first 10 chars: {api_key[:10]}...)")
+            sys.stdout.flush()
+            try:
+                self.client = openai.OpenAI(api_key=api_key, timeout=30.0)
+                print(f"[model] OpenAI client initialized successfully")
+                sys.stdout.flush()
+            except Exception as e:
+                print(f"[model] Error initializing OpenAI client: {e}")
+                print(f"[model] Falling back to mock mode")
+                sys.stdout.flush()
+                self.client = None
     
     def generate(
         self, 
@@ -75,11 +87,13 @@ class OpenAIModel:
                 max_tokens=max_tokens
             )
             
-            return response.choices[0].message.content.strip()
+            result = response.choices[0].message.content.strip()
+            return result
         
         except Exception as e:
             print(f"[model] Error calling OpenAI API: {e}")
             print(f"[model] Falling back to mock response")
+            sys.stdout.flush()
             return self._mock_generate(prompt, temperature)
     
     def _mock_generate(self, prompt: str, temperature: float) -> str:

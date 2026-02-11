@@ -62,11 +62,13 @@ def main(cfg: DictConfig) -> None:
     
     print(f"[main] Invoking inference.py: {' '.join(cmd)}")
     
-    # Invoke inference.py as subprocess
+    # Invoke inference.py as subprocess with real-time output streaming
     result = subprocess.run(
         cmd,
         cwd=Path.cwd(),
         check=False,  # Don't raise exception on non-zero exit
+        stdout=sys.stdout,  # Stream stdout in real-time
+        stderr=sys.stderr,  # Stream stderr in real-time
     )
     
     if result.returncode != 0:

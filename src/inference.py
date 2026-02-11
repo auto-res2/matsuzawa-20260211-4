@@ -269,11 +269,18 @@ def build_demonstrations(
     for idx, rep_idx in enumerate(representative_indices):
         question = train_data[rep_idx]['question']
         print(f"[build_demos] Processing demo {idx+1}/{len(representative_indices)}: {question[:60]}...")
+        sys.stdout.flush()
         
         # Generate one candidate demo (greedy)
+        print(f"[build_demos] Generating candidate solution...")
+        sys.stdout.flush()
         solution, answer = solve_question(question, model, temperature=0.0)
+        print(f"[build_demos] Got answer: {answer}")
+        sys.stdout.flush()
         
         # Compute self-consistency score
+        print(f"[build_demos] Computing self-consistency...")
+        sys.stdout.flush()
         sc_score, majority_answer = compute_self_consistency(
             question,
             model,
@@ -282,9 +289,12 @@ def build_demonstrations(
         )
         
         print(f"  Self-consistency: {sc_score:.3f}, majority answer: {majority_answer}")
+        sys.stdout.flush()
         
         # Compute paraphrase-consistency score (if enabled)
         if method_name == "pr-autocot" and cfg.method.paraphrase_consistency.get('enabled', True):
+            print(f"[build_demos] Computing paraphrase-consistency...")
+            sys.stdout.flush()
             pc_score = compute_paraphrase_consistency(
                 question,
                 model,
@@ -350,8 +360,13 @@ def create_prompt_with_demos(demos: List[Dict[str, Any]], test_question: str) ->
 def run_inference(cfg: DictConfig) -> None:
     """Main inference pipeline."""
     
+    print(f"[inference] Starting run_inference for {cfg.run_id}")
+    sys.stdout.flush()
+    
     # Initialize WandB
     if cfg.wandb.mode != "disabled":
+        print(f"[inference] Initializing WandB...")
+        sys.stdout.flush()
         wandb.init(
             entity=cfg.wandb.entity,
             project=cfg.wandb.project,
@@ -360,26 +375,41 @@ def run_inference(cfg: DictConfig) -> None:
             resume="allow"
         )
         print(f"[inference] WandB initialized: {wandb.run.get_url()}")
+        sys.stdout.flush()
     else:
         print(f"[inference] WandB disabled (mode={cfg.wandb.mode})")
+        sys.stdout.flush()
     
     # Load data
+    print(f"[inference] Loading data...")
+    sys.stdout.flush()
     train_data, test_data = load_gsm8k_data(cfg)
+    print(f"[inference] Data loaded: {len(train_data)} train, {len(test_data)} test")
+    sys.stdout.flush()
     
     # Limit test data in sanity_check mode
     if cfg.mode == "sanity_check":
         test_data = test_data[:cfg.inference.sanity_check_samples]
         print(f"[inference] Sanity check mode: limited to {len(test_data)} test samples")
+        sys.stdout.flush()
     
     # Initialize model with ground truth data for mock mode
+    print(f"[inference] Initializing model {cfg.model.name}...")
+    sys.stdout.flush()
     ground_truth_data = {
         'train': train_data,
         'test': test_data
     }
     model = OpenAIModel(cfg.model, ground_truth_data=ground_truth_data)
+    print(f"[inference] Model initialized")
+    sys.stdout.flush()
     
     # Build demonstrations
+    print(f"[inference] Building demonstrations...")
+    sys.stdout.flush()
     demonstrations = build_demonstrations(train_data, model, cfg)
+    print(f"[inference] Built {len(demonstrations)} demonstrations")
+    sys.stdout.flush()
     
     print(f"[inference] Starting test inference on {len(test_data)} questions")
     
