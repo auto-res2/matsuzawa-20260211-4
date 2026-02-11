@@ -13,16 +13,16 @@ method:
   clustering:
     method: kmeans
     vectorizer: tfidf  # or sbert
-    k: 8  # number of representative questions/demos
+    k: 6  # number of representative questions/demos (reduced from 8 for faster execution)
   
   # Self-consistency scoring
   self_consistency:
-    num_samples: 5  # m stochastic solutions
+    num_samples: 3  # m stochastic solutions (reduced from 5 for faster execution)
     temperature: 0.7
   
   # Paraphrase-consistency scoring (novel component)
   paraphrase_consistency:
-    num_paraphrases: 3  # P meaning-preserving paraphrases
+    num_paraphrases: 2  # P meaning-preserving paraphrases (reduced from 3 for faster execution)
     temperature: 0.3  # low temp for paraphrase solving
   
   # Reliability weighting
@@ -43,8 +43,8 @@ model:
 
 dataset:
   name: gsm8k
-  split_train: train[:500]  # Subsample for demo pool (unlabeled use)
-  split_test: test[:200]  # Subsample for evaluation
+  split_train: train[:300]  # Subsample for demo pool (unlabeled use) - reduced for faster execution
+  split_test: test[:100]  # Subsample for evaluation - reduced for faster execution
   cache_dir: .cache
 
 inference:

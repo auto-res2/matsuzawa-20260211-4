@@ -3,6 +3,7 @@ Model wrapper for language models (OpenAI API).
 """
 import os
 import re
+import time
 from typing import Optional, Dict, Any
 from omegaconf import DictConfig
 import openai
@@ -36,10 +37,17 @@ class OpenAIModel:
         # Initialize OpenAI client
         api_key = os.environ.get('OPENAI_API_KEY')
         if not api_key:
-            print("[model] WARNING: OPENAI_API_KEY not set, using mock responses")
+            print("[model] WARNING: OPENAI_API_KEY not set, using mock responses", flush=True)
             self.client = None
         else:
-            self.client = openai.OpenAI(api_key=api_key)
+            print(f"[model] Initializing OpenAI client with key: {api_key[:10]}...", flush=True)
+            try:
+                self.client = openai.OpenAI(api_key=api_key)
+                print(f"[model] OpenAI client initialized successfully", flush=True)
+            except Exception as e:
+                print(f"[model] Failed to initialize OpenAI client: {e}", flush=True)
+                print(f"[model] Using mock responses", flush=True)
+                self.client = None
     
     def generate(
         self, 
@@ -66,20 +74,24 @@ class OpenAIModel:
             return self._mock_generate(prompt, temperature)
         
         try:
+            # Small delay to avoid rate limits (0.1 seconds)
+            time.sleep(0.1)
+            
             response = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=[
                     {"role": "user", "content": prompt}
                 ],
                 temperature=temperature,
-                max_tokens=max_tokens
+                max_tokens=max_tokens,
+                timeout=30.0  # 30 second timeout per API call
             )
             
             return response.choices[0].message.content.strip()
         
         except Exception as e:
-            print(f"[model] Error calling OpenAI API: {e}")
-            print(f"[model] Falling back to mock response")
+            print(f"[model] Error calling OpenAI API: {e}", flush=True)
+            print(f"[model] Falling back to mock response", flush=True)
             return self._mock_generate(prompt, temperature)
     
     def _mock_generate(self, prompt: str, temperature: float) -> str:

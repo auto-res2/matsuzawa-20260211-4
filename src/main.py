@@ -29,12 +29,12 @@ def main(cfg: DictConfig) -> None:
         cfg.wandb.mode = "disabled"
         cfg.inference.sanity_check_samples = 10  # Process 10 samples
         OmegaConf.set_struct(cfg, True)
-        print(f"[main] Running in sanity_check mode: wandb disabled, limited to {cfg.inference.sanity_check_samples} samples")
+        print(f"[main] Running in sanity_check mode: wandb disabled, limited to {cfg.inference.sanity_check_samples} samples", flush=True)
     elif cfg.mode == "main":
         # Full execution
-        print(f"[main] Running in main mode: full dataset, wandb online")
+        print(f"[main] Running in main mode: full dataset, wandb online", flush=True)
     else:
-        print(f"[main] Running in {cfg.mode} mode")
+        print(f"[main] Running in {cfg.mode} mode", flush=True)
     
     # Create results directory
     results_dir = Path(cfg.results_dir)
@@ -60,7 +60,7 @@ def main(cfg: DictConfig) -> None:
         if "wandb.mode=" not in ' '.join(original_args):
             cmd.append("wandb.mode=disabled")
     
-    print(f"[main] Invoking inference.py: {' '.join(cmd)}")
+    print(f"[main] Invoking inference.py: {' '.join(cmd)}", flush=True)
     
     # Invoke inference.py as subprocess
     result = subprocess.run(
@@ -70,10 +70,10 @@ def main(cfg: DictConfig) -> None:
     )
     
     if result.returncode != 0:
-        print(f"[main] inference.py exited with code {result.returncode}")
+        print(f"[main] inference.py exited with code {result.returncode}", flush=True)
         sys.exit(result.returncode)
     
-    print(f"[main] Completed run {cfg.run_id}")
+    print(f"[main] Completed run {cfg.run_id}", flush=True)
 
 
 if __name__ == "__main__":

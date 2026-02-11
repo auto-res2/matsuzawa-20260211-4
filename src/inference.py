@@ -251,29 +251,33 @@ def build_demonstrations(
     method_name = cfg.method.name
     k = cfg.method.clustering.k
     
-    print(f"[build_demos] Starting {method_name} with k={k} demonstrations")
+    print(f"[build_demos] Starting {method_name} with k={k} demonstrations", flush=True)
     
     # Step 1: Diverse candidate selection
     questions = [item['question'] for item in train_data]
+    print(f"[build_demos] Clustering {len(questions)} questions...", flush=True)
     representative_indices = cluster_questions(
         questions, 
         k=k, 
         method=cfg.method.clustering.vectorizer
     )
     
-    print(f"[build_demos] Selected {len(representative_indices)} representative questions")
+    print(f"[build_demos] Selected {len(representative_indices)} representative questions", flush=True)
     
     # Step 2: Generate candidate demonstrations and score them
     demonstrations = []
     
     for idx, rep_idx in enumerate(representative_indices):
         question = train_data[rep_idx]['question']
-        print(f"[build_demos] Processing demo {idx+1}/{len(representative_indices)}: {question[:60]}...")
+        print(f"[build_demos] Processing demo {idx+1}/{len(representative_indices)}: {question[:60]}...", flush=True)
         
         # Generate one candidate demo (greedy)
+        print(f"  Generating greedy solution...", flush=True)
         solution, answer = solve_question(question, model, temperature=0.0)
+        print(f"  Generated answer: {answer}", flush=True)
         
         # Compute self-consistency score
+        print(f"  Computing self-consistency (n={cfg.method.self_consistency.num_samples})...", flush=True)
         sc_score, majority_answer = compute_self_consistency(
             question,
             model,
@@ -281,10 +285,11 @@ def build_demonstrations(
             temperature=cfg.method.self_consistency.temperature
         )
         
-        print(f"  Self-consistency: {sc_score:.3f}, majority answer: {majority_answer}")
+        print(f"  Self-consistency: {sc_score:.3f}, majority answer: {majority_answer}", flush=True)
         
         # Compute paraphrase-consistency score (if enabled)
         if method_name == "pr-autocot" and cfg.method.paraphrase_consistency.get('enabled', True):
+            print(f"  Computing paraphrase-consistency (n={cfg.method.paraphrase_consistency.num_paraphrases})...", flush=True)
             pc_score = compute_paraphrase_consistency(
                 question,
                 model,
@@ -292,7 +297,7 @@ def build_demonstrations(
                 temperature=cfg.method.paraphrase_consistency.temperature,
                 majority_answer=majority_answer
             )
-            print(f"  Paraphrase-consistency: {pc_score:.3f}")
+            print(f"  Paraphrase-consistency: {pc_score:.3f}", flush=True)
         else:
             pc_score = 1.0  # Not used in baseline
         
@@ -307,7 +312,7 @@ def build_demonstrations(
         else:
             reliability = sc_score
         
-        print(f"  Reliability weight: {reliability:.3f}")
+        print(f"  Reliability weight: {reliability:.3f}", flush=True)
         
         demonstrations.append({
             'question': question,
@@ -323,7 +328,8 @@ def build_demonstrations(
     demonstrations = [d for d in demonstrations if d['reliability'] >= threshold]
     demonstrations.sort(key=lambda d: d['reliability'], reverse=True)
     
-    print(f"[build_demos] Kept {len(demonstrations)}/{len(representative_indices)} demos (threshold={threshold})")
+    print(f"[build_demos] Kept {len(demonstrations)}/{len(representative_indices)} demos (threshold={threshold})", flush=True)
+    print(f"[build_demos] Demonstration building complete!", flush=True)
     
     return demonstrations
 
@@ -350,8 +356,11 @@ def create_prompt_with_demos(demos: List[Dict[str, Any]], test_question: str) ->
 def run_inference(cfg: DictConfig) -> None:
     """Main inference pipeline."""
     
+    print(f"[inference] Starting inference pipeline", flush=True)
+    
     # Initialize WandB
     if cfg.wandb.mode != "disabled":
+        print(f"[inference] Initializing WandB...", flush=True)
         wandb.init(
             entity=cfg.wandb.entity,
             project=cfg.wandb.project,
@@ -359,19 +368,21 @@ def run_inference(cfg: DictConfig) -> None:
             config=OmegaConf.to_container(cfg, resolve=True),
             resume="allow"
         )
-        print(f"[inference] WandB initialized: {wandb.run.get_url()}")
+        print(f"[inference] WandB initialized: {wandb.run.url}", flush=True)
     else:
-        print(f"[inference] WandB disabled (mode={cfg.wandb.mode})")
+        print(f"[inference] WandB disabled (mode={cfg.wandb.mode})", flush=True)
     
     # Load data
+    print(f"[inference] Loading dataset...", flush=True)
     train_data, test_data = load_gsm8k_data(cfg)
     
     # Limit test data in sanity_check mode
     if cfg.mode == "sanity_check":
         test_data = test_data[:cfg.inference.sanity_check_samples]
-        print(f"[inference] Sanity check mode: limited to {len(test_data)} test samples")
+        print(f"[inference] Sanity check mode: limited to {len(test_data)} test samples", flush=True)
     
     # Initialize model with ground truth data for mock mode
+    print(f"[inference] Initializing model: {cfg.model.name}", flush=True)
     ground_truth_data = {
         'train': train_data,
         'test': test_data
@@ -379,9 +390,10 @@ def run_inference(cfg: DictConfig) -> None:
     model = OpenAIModel(cfg.model, ground_truth_data=ground_truth_data)
     
     # Build demonstrations
+    print(f"[inference] Building demonstrations...", flush=True)
     demonstrations = build_demonstrations(train_data, model, cfg)
     
-    print(f"[inference] Starting test inference on {len(test_data)} questions")
+    print(f"[inference] Starting test inference on {len(test_data)} questions", flush=True)
     
     # Run inference on test set
     correct = 0
@@ -415,7 +427,7 @@ def run_inference(cfg: DictConfig) -> None:
         accuracy = correct / total if total > 0 else 0.0
         
         if (i + 1) % 10 == 0 or i < 5:
-            print(f"[inference] Sample {i+1}/{len(test_data)}: acc={accuracy:.3f} ({correct}/{total})")
+            print(f"[inference] Sample {i+1}/{len(test_data)}: acc={accuracy:.3f} ({correct}/{total})", flush=True)
         
         results.append({
             'question': question,
@@ -434,12 +446,13 @@ def run_inference(cfg: DictConfig) -> None:
     
     # Final metrics
     final_accuracy = correct / total if total > 0 else 0.0
-    print(f"[inference] Final accuracy: {final_accuracy:.4f} ({correct}/{total})")
+    print(f"[inference] Final accuracy: {final_accuracy:.4f} ({correct}/{total})", flush=True)
     
     # Save results
     results_dir = Path(cfg.results_dir) / cfg.run_id
     results_dir.mkdir(parents=True, exist_ok=True)
     
+    print(f"[inference] Saving results to {results_dir}", flush=True)
     with open(results_dir / 'results.json', 'w') as f:
         json.dump(results, f, indent=2)
     
@@ -448,6 +461,7 @@ def run_inference(cfg: DictConfig) -> None:
     
     # Log to WandB summary
     if cfg.wandb.mode != "disabled":
+        print(f"[inference] Logging to WandB summary", flush=True)
         wandb.summary['accuracy'] = final_accuracy
         wandb.summary['correct'] = correct
         wandb.summary['total'] = total
@@ -457,7 +471,7 @@ def run_inference(cfg: DictConfig) -> None:
     if cfg.mode == "sanity_check":
         perform_sanity_validation(results, demonstrations)
     
-    print(f"[inference] Results saved to {results_dir}")
+    print(f"[inference] Results saved to {results_dir}", flush=True)
 
 
 def perform_sanity_validation(results: List[Dict[str, Any]], demonstrations: List[Dict[str, Any]]) -> None:
@@ -524,13 +538,19 @@ def perform_sanity_validation(results: List[Dict[str, Any]], demonstrations: Lis
 @hydra.main(config_path="../config", config_name="config", version_base="1.3")
 def main(cfg: DictConfig) -> None:
     """Entry point."""
-    print(f"[inference] Starting {cfg.method.name} for run {cfg.run_id}")
-    print(f"[inference] Mode: {cfg.mode}")
-    print(f"[inference] Dataset: {cfg.dataset.name}")
+    print(f"[inference] Starting {cfg.method.name} for run {cfg.run_id}", flush=True)
+    print(f"[inference] Mode: {cfg.mode}", flush=True)
+    print(f"[inference] Dataset: {cfg.dataset.name}", flush=True)
+    print(f"[inference] Model: {cfg.model.name}", flush=True)
     
-    run_inference(cfg)
-    
-    print(f"[inference] Completed successfully")
+    try:
+        run_inference(cfg)
+        print(f"[inference] Completed successfully", flush=True)
+    except Exception as e:
+        print(f"[inference] ERROR: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        raise
 
 
 if __name__ == "__main__":
