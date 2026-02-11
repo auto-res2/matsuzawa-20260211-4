@@ -18,6 +18,10 @@ import wandb
 from src.preprocess import load_gsm8k_data
 from src.model import OpenAIModel
 
+# Transform 'run=' arguments to 'runs=' to match directory structure
+# This allows command line to use 'run=X' while Hydra looks in 'runs/' directory
+sys.argv = [arg.replace('run=', 'runs=', 1) if arg.startswith('run=') else arg for arg in sys.argv]
+
 
 def extract_numeric_answer(text: str) -> Optional[float]:
     """Extract final numeric answer from model output."""

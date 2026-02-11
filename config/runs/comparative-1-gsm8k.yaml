@@ -1,3 +1,4 @@
+# @package _global_.run
 # CW-AutoCoT (Self-Consistency-Only Auto-CoT) - Baseline Method
 # Inference-only chain-of-thought demonstration construction with self-consistency filtering only
 

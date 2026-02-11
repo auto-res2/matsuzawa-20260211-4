@@ -8,6 +8,10 @@ from pathlib import Path
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
+# Transform 'run=' arguments to 'runs=' to match directory structure
+# This allows command line to use 'run=X' while Hydra looks in 'runs/' directory
+sys.argv = [arg.replace('run=', 'runs=', 1) if arg.startswith('run=') else arg for arg in sys.argv]
+
 
 @hydra.main(config_path="../config", config_name="config", version_base="1.3")
 def main(cfg: DictConfig) -> None:

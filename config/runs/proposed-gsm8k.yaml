@@ -1,3 +1,4 @@
+# @package _global_.run
 # PR-AutoCoT (Paraphrase-Robust Auto-CoT) - Proposed Method
 # Inference-only chain-of-thought demonstration construction with paraphrase robustness filtering
 
