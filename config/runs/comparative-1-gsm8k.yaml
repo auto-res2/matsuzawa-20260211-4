@@ -1,0 +1,51 @@
+# CW-AutoCoT (Self-Consistency-Only Auto-CoT) - Baseline Method
+# Inference-only chain-of-thought demonstration construction with self-consistency filtering only
+
+run_id: comparative-1-gsm8k
+
+method:
+  name: cw-autocot
+  type: comparative
+  description: "Auto-CoT with self-consistency filtering only (no paraphrase robustness)"
+  
+  # Diverse candidate selection (same as proposed)
+  clustering:
+    method: kmeans
+    vectorizer: tfidf
+    k: 8  # number of representative questions/demos
+  
+  # Self-consistency scoring only
+  self_consistency:
+    num_samples: 5  # m stochastic solutions
+    temperature: 0.7
+  
+  # NO paraphrase-consistency scoring
+  paraphrase_consistency:
+    enabled: false
+  
+  # Reliability weighting (self-consistency only)
+  reliability:
+    combining: self_only  # w_i = s_i
+    threshold: 0.5  # τ: keep demos with w_i >= τ
+  
+  # Final inference (same as proposed)
+  inference:
+    strategy: greedy
+    temperature: 0.0
+
+model:
+  name: gpt-3.5-turbo  # Same base LLM as proposed
+  provider: openai
+  max_tokens: 512
+  cache_dir: .cache
+
+dataset:
+  name: gsm8k
+  split_train: train[:500]  # Same subsample as proposed
+  split_test: test[:200]  # Same test subsample as proposed
+  cache_dir: .cache
+
+inference:
+  task_type: math_word_problem
+  extract_answer: true
+  sanity_check_samples: 10

@@ -1,0 +1,52 @@
+# PR-AutoCoT (Paraphrase-Robust Auto-CoT) - Proposed Method
+# Inference-only chain-of-thought demonstration construction with paraphrase robustness filtering
+
+run_id: proposed-gsm8k
+
+method:
+  name: pr-autocot
+  type: proposed
+  description: "Paraphrase-Robust Auto-CoT with semantic robustness scoring"
+  
+  # Diverse candidate selection (Auto-CoT standard)
+  clustering:
+    method: kmeans
+    vectorizer: tfidf  # or sbert
+    k: 8  # number of representative questions/demos
+  
+  # Self-consistency scoring
+  self_consistency:
+    num_samples: 5  # m stochastic solutions
+    temperature: 0.7
+  
+  # Paraphrase-consistency scoring (novel component)
+  paraphrase_consistency:
+    num_paraphrases: 3  # P meaning-preserving paraphrases
+    temperature: 0.3  # low temp for paraphrase solving
+  
+  # Reliability weighting
+  reliability:
+    combining: sqrt_product  # sqrt(s_i * p_i), or "min" for ablation
+    threshold: 0.5  # τ: keep demos with w_i >= τ
+  
+  # Final inference
+  inference:
+    strategy: greedy  # greedy decoding for test questions
+    temperature: 0.0
+
+model:
+  name: gpt-3.5-turbo  # Base LLM for all steps
+  provider: openai
+  max_tokens: 512
+  cache_dir: .cache
+
+dataset:
+  name: gsm8k
+  split_train: train[:500]  # Subsample for demo pool (unlabeled use)
+  split_test: test[:200]  # Subsample for evaluation
+  cache_dir: .cache
+
+inference:
+  task_type: math_word_problem
+  extract_answer: true  # Extract final numeric answer
+  sanity_check_samples: 10  # Number of samples in sanity_check mode
