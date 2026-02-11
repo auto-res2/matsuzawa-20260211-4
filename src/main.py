@@ -51,7 +51,6 @@ def main(cfg: DictConfig) -> None:
     
     # Add Hydra overrides from command line
     # We need to reconstruct the original command-line args
-    import sys
     original_args = sys.argv[1:]  # Get original hydra args
     cmd.extend(original_args)
     
